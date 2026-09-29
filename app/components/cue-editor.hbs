@@ -10,6 +10,8 @@
     <div class="header-meta">
       <span>{{this.show.venue}}</span>
       <span>{{this.show.date}}</span>
+      <span class={{if this.pendingItems.length "status-pending" "status-ok"}}>{{this.pendingItems.length}} 项待裁决</span>
+      <span class={{if this.exceptions.length "status-pending" "status-ok"}}>{{this.exceptions.length}} 条异常</span>
       <span class={{if this.errors "status-error" "status-ok"}}>{{if this.errors (concat this.errors " 项需处理") "当前无硬性冲突"}}</span>
     </div>
     <div class="header-actions">
@@ -32,7 +34,7 @@
   </section>
 
   <main class="stage-workspace">
-    <aside class="scene-rail paper-surface">
+    <aside class="scene-rail paper-surface" aria-label="场次列表">
       <div class="rail-heading">
         <div><small>SCENES</small><h2>幕次与场次</h2></div>
         <PaperButton @iconButton={{true}} @primary={{true}} @onClick={{this.addScene}} @title="新增场次">＋</PaperButton>
@@ -51,6 +53,8 @@
       <div class="rail-footer">
         <PaperButton @onClick={{this.copyPreviousScene}} class="wide-button">复制上一场流程</PaperButton>
         <PaperButton @onClick={{this.lockVersion}} class="wide-button" @warn={{true}}>锁定当前版本</PaperButton>
+        <PaperButton @onClick={{fn this.openModal "external"}} class="wide-button">接收外部改动</PaperButton>
+        <PaperButton @onClick={{fn this.openModal "legacy"}} class="wide-button">导入旧版提示表</PaperButton>
       </div>
     </aside>
 
@@ -86,6 +90,7 @@
           </div>
           <div class="cue-list">
             {{#each this.cueRows as |cue|}}
+              {{! template-lint-disable no-invalid-interactive }}
               <article
                 class="cue-row kind-{{cue.kindClass}} {{if cue.selected "is-selected"}}"
                 draggable="true"
@@ -119,6 +124,7 @@
                   <small>{{if cue.dependsOn.length (concat cue.dependsOn.length " 个前置") "无前置依赖"}}</small>
                 </div>
               </article>
+              {{! template-lint-enable no-invalid-interactive }}
             {{else}}
               <div class="empty-board">
                 <h3>本场还没有提示</h3>
@@ -132,7 +138,68 @@
       {{/if}}
     </section>
 
-    <aside class="inspector-rail">
+    <aside class="inspector-rail" aria-label="检查与变更单">
+      {{#if this.pendingItems.length}}
+        <section class="panel pending-panel paper-surface">
+          <div class="panel-heading">
+            <div><small>PENDING ADJUDICATION</small><h2>待裁决区</h2></div>
+            <span class="issue-count">{{this.pendingItems.length}}</span>
+          </div>
+          <p class="panel-hint">两边改了同一字段，或锁定场次收到外部改动。场务选定后才进正式表。</p>
+          <div class="pending-list">
+            {{#each this.pendingItems as |item|}}
+              <article class="pending-item reason-{{item.reason}}">
+                <div class="pending-path">
+                  <strong>{{item.sceneLabel}}</strong>
+                  {{#if item.cueLabel}}<span>· {{item.cueLabel}}</span>{{/if}}
+                  <span>· {{item.fieldLabel}}</span>
+                  <span class="reason-tag {{if (eq item.reason "conflict") "tag-conflict" "tag-locked"}}">{{if (eq item.reason "conflict") "两边冲突" "锁定场次"}}</span>
+                </div>
+                <div class="pending-values">
+                  <div class="pv pv-local">
+                    <small>正式表（本地）</small>
+                    <span>{{item.localValue}}</span>
+                  </div>
+                  <div class="pv pv-incoming">
+                    <small>协作者（外部）</small>
+                    <span>{{item.incomingValue}}</span>
+                  </div>
+                </div>
+                <div class="pending-actions">
+                  <PaperButton @onClick={{fn this.adjudicate item "local"}}>采用本地</PaperButton>
+                  <PaperButton @raised={{true}} @primary={{true}} @onClick={{fn this.adjudicate item "incoming"}}>采用外部</PaperButton>
+                </div>
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
+
+      {{#if this.exceptions.length}}
+        <section class="panel exception-panel paper-surface">
+          <div class="panel-heading">
+            <div><small>EXCEPTION BOX</small><h2>异常箱</h2></div>
+            <span class="issue-count">{{this.exceptions.length}}</span>
+          </div>
+          <p class="panel-hint">旧版提示表中字段损坏、无法载入的记录；其余场次照常编辑。</p>
+          <div class="exception-list">
+            {{#each this.exceptions as |ex|}}
+              <article class="exception-item">
+                <div class="pending-path">
+                  <strong>{{ex.sceneLabel}}</strong>
+                  {{#if ex.cueLabel}}<span>· {{ex.cueLabel}}</span>{{/if}}
+                </div>
+                <div class="exception-reason">{{ex.reason}}</div>
+                <pre class="exception-raw">{{ex.raw}}</pre>
+                <div class="pending-actions">
+                  <PaperButton @onClick={{fn this.discardException ex.id}}>丢弃</PaperButton>
+                </div>
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
+
       <section class="inspector paper-surface">
         <div class="inspector-heading">
           <div><small>{{if this.draft "CUE EDITOR" "CUE INSPECTOR"}}</small><h2>{{if this.draft "编辑提示" "提示详情"}}</h2></div>
@@ -220,8 +287,75 @@
           <p class="empty-copy">尚未锁定版本。锁定后可比较当前流程与历史快照。</p>
         {{/if}}
       </section>
+
+      <section class="panel order-panel paper-surface">
+        <div class="panel-heading">
+          <div><small>CHANGE ORDERS</small><h2>变更单</h2></div>
+          {{#if this.changeOrders.length}}
+            <PaperButton @onClick={{this.clearOrders}}>清空</PaperButton>
+          {{/if}}
+        </div>
+        {{#if this.orderRows.length}}
+          <div class="order-list">
+            {{#each this.orderRows as |order|}}
+              <article class="order-item">
+                <div class="order-head">
+                  <span class="order-kind kind-{{order.kind}}">{{order.kindLabel}}</span>
+                  <strong>{{order.summary}}</strong>
+                  <small>{{order.author}} · {{order.timeLabel}}</small>
+                </div>
+                {{#if order.changes.length}}
+                  <ul class="order-changes">
+                    {{#each order.changes as |ch|}}
+                      <li>
+                        <span class="change-path">{{ch.sceneLabel}}{{#if ch.cueLabel}} · {{ch.cueLabel}}{{/if}} · {{ch.fieldLabel}}</span>
+                        <span class="change-values"><em>{{ch.oldValue}}</em> → <em>{{ch.newValue}}</em></span>
+                      </li>
+                    {{/each}}
+                  </ul>
+                {{/if}}
+              </article>
+            {{/each}}
+          </div>
+        {{else}}
+          <p class="empty-copy">保存提示、接收外部改动或场务裁决后，变更单会记录场次、提示与字段的新旧值。</p>
+        {{/if}}
+      </section>
     </aside>
   </main>
+
+  {{#if this.modal}}
+    {{! template-lint-disable no-invalid-interactive }}
+    <div class="modal-overlay" {{on "click" this.closeModal}}>
+      <div class="modal-card paper-surface" role="dialog" aria-modal="true" aria-label="导入提示表" {{on "click" this.stopPropagation}}>
+        <h3>{{if (eq this.modal "external") "接收外部改动" "导入旧版提示表"}}</h3>
+        <p class="modal-hint">
+          {{if
+            (eq this.modal "external")
+            "粘贴协作者发来的提示表 JSON（整场数据）。系统按上次同步点做三路合并：没碰同一字段的改动直接进正式表，两边都改过同一字段或锁定场次的改动进待裁决区。"
+            "粘贴旧版提示表 JSON。启动时会按原顺序载入；字段损坏的记录进异常箱，其余场次照常编辑。"
+          }}
+        </p>
+        {{#if (eq this.modal "external")}}
+          <PaperInput @label="协作者署名（可选）" @value={{this.importAuthor}} @onChange={{this.setImportAuthor}} />
+        {{/if}}
+        <textarea
+          class="import-textarea"
+          aria-label="提示表 JSON"
+          placeholder='{"title":"...","scenes":[...]}'
+          value={{this.importText}}
+          {{on "input" this.updateImportText}}
+        ></textarea>
+        <div class="modal-actions">
+          <PaperButton @onClick={{this.closeModal}}>取消</PaperButton>
+          <PaperButton @raised={{true}} @primary={{true}} @onClick={{this.submitModal}}>
+            {{if (eq this.modal "external") "执行合并" "载入旧版"}}
+          </PaperButton>
+        </div>
+      </div>
+    </div>
+    {{! template-lint-enable no-invalid-interactive }}
+  {{/if}}
 
   {{#if this.message}}<div class="toast-message">{{this.message}}</div>{{/if}}
 </div>
