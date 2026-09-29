@@ -4,27 +4,39 @@
       <span class="brand-mark">CUE</span>
       <div>
         <small>STAGE CALL &amp; PROMPT BOOK</small>
-        <h1>{{this.show.title}}</h1>
+        <h1>{{this.official.title}}</h1>
       </div>
     </div>
     <div class="header-meta">
-      <span>{{this.show.venue}}</span>
-      <span>{{this.show.date}}</span>
+      <span>{{this.official.venue}}</span>
+      <span>{{this.official.date}}</span>
       <span class={{if this.errors "status-error" "status-ok"}}>{{if this.errors (concat this.errors " 项需处理") "当前无硬性冲突"}}</span>
     </div>
     <div class="header-actions">
+      <PaperInput @label="当前使用人" @value={{this.author}} @onChange={{this.setAuthor}} class="author-input" />
       <PaperButton @onClick={{this.undo}} @title="撤销 Ctrl/Cmd+Z">撤销</PaperButton>
       <PaperButton @onClick={{this.redo}} @title="重做 Ctrl/Cmd+Y">重做</PaperButton>
-      <PaperButton @raised={{true}} @primary={{true}} @onClick={{fn this.createCueDraft "灯光"}}>新增提示</PaperButton>
+      <PaperButton @raised={{true}} @primary={{true}} @onClick={{this.submitChangeOrder}} @title="保存为变更单：未冲突字段自动合并，同字段改动进入待裁决">保存变更单{{if this.isDirty (concat "（" this.pendingChangeCount "）") ""}}</PaperButton>
     </div>
   </header>
 
+  {{#if this.isDirty}}
+    <div class="draft-bar">
+      <span class="draft-dot"></span>
+      工作副本有 <strong>{{this.pendingChangeCount}}</strong> 项未保存改动，将在“保存变更单”时与正式表合并
+      <PaperInput @label="改动说明（可选）" @value={{this.orderNote}} @onChange={{this.setOrderNote}} class="draft-note" />
+      <PaperButton @onClick={{this.discardWorkingChanges}}>放弃改动</PaperButton>
+    </div>
+  {{/if}}
+
   <section class="show-strip">
-    <PaperInput @label="演出名称" @value={{this.show.title}} @onChange={{this.updateShowTitle}} class="show-title-input" />
+    <PaperInput @label="演出名称" @value={{this.workingTitle}} @onChange={{this.updateShowTitle}} class="show-title-input" />
     <div class="show-stats">
-      <span><strong>{{this.show.scenes.length}}</strong> 场次</span>
+      <span><strong>{{this.official.scenes.length}}</strong> 场次</span>
       <span><strong>{{this.allCues.length}}</strong> 条提示</span>
       <span><strong>{{this.errors}}</strong> 项阻塞</span>
+      <span class={{if this.pending.length "stat-flag"}}><strong>{{this.pending.length}}</strong> 待裁决</span>
+      <span class={{if this.corrupt.length "stat-flag"}}><strong>{{this.corrupt.length}}</strong> 异常箱</span>
     </div>
     <div class="search-box">
       <PaperInput @label="查找场次" @value={{this.search}} @onChange={{this.setSearch}} />
@@ -32,7 +44,7 @@
   </section>
 
   <main class="stage-workspace">
-    <aside class="scene-rail paper-surface">
+    <aside class="scene-rail paper-surface" aria-label="幕次与场次">
       <div class="rail-heading">
         <div><small>SCENES</small><h2>幕次与场次</h2></div>
         <PaperButton @iconButton={{true}} @primary={{true}} @onClick={{this.addScene}} @title="新增场次">＋</PaperButton>
@@ -50,7 +62,6 @@
       </div>
       <div class="rail-footer">
         <PaperButton @onClick={{this.copyPreviousScene}} class="wide-button">复制上一场流程</PaperButton>
-        <PaperButton @onClick={{this.lockVersion}} class="wide-button" @warn={{true}}>锁定当前版本</PaperButton>
       </div>
     </aside>
 
@@ -69,23 +80,36 @@
           <div class="lock-state">
             {{#if this.activeScene.locked}}
               <span class="locked-label">本场已锁定</span>
-              <PaperButton @onClick={{this.createRevision}}>建立修订</PaperButton>
+              <PaperButton @onClick={{this.toggleSceneLock}}>解锁本场</PaperButton>
+              <PaperButton @onClick={{this.createRevision}}>全部解锁修订</PaperButton>
             {{else}}
               <PaperButton @onClick={{this.toggleSceneLock}}>锁定本场</PaperButton>
             {{/if}}
           </div>
         </div>
 
+        {{#if this.activeScene.locked}}
+          <div class="locked-banner">
+            <strong>本场已锁定</strong>
+            <span>编辑仍可进行，保存变更单时本场所有外部与本地改动都会先进入待裁决区，经场务选定后才写入正式表。</span>
+          </div>
+        {{/if}}
+
         <div class="timeline paper-surface">
           <div class="timeline-head">
             <div><small>PROMPT SEQUENCE</small><h2>提示顺序与时间</h2></div>
-            <div class="keyboard-note">拖动排序 · <kbd>Alt</kbd> + <kbd>↑↓</kbd> 调整 · <kbd>N</kbd> 新建</div>
+            <div class="timeline-head-actions">
+              <div class="keyboard-note">拖动排序 · <kbd>Alt</kbd> + <kbd>↑↓</kbd> 调整 · <kbd>N</kbd> 新建</div>
+              <PaperButton @raised={{true}} @primary={{true}} @onClick={{fn this.createCueDraft "灯光"}}>新增提示</PaperButton>
+            </div>
           </div>
           <div class="timeline-labels">
             <span>时间</span><span>类型 / 提示内容</span><span>时长</span><span>负责人</span>
           </div>
           <div class="cue-list">
             {{#each this.cueRows as |cue|}}
+              {{!-- 行整选与原生拖拽依赖同一元素（原有交互模式） --}}
+              {{! template-lint-disable no-invalid-interactive }}
               <article
                 class="cue-row kind-{{cue.kindClass}} {{if cue.selected "is-selected"}}"
                 draggable="true"
@@ -94,6 +118,7 @@
                 {{on "drop" (fn this.dropOn cue.id)}}
                 {{on "click" (fn this.selectCue cue.id)}}
               >
+              {{! template-lint-enable no-invalid-interactive }}
                 <div class="cue-time">
                   <span class="drag-dot">⠿</span>
                   <strong>{{cue.start}}</strong>
@@ -132,7 +157,7 @@
       {{/if}}
     </section>
 
-    <aside class="inspector-rail">
+    <aside class="inspector-rail" aria-label="提示检查与变更裁决">
       <section class="inspector paper-surface">
         <div class="inspector-heading">
           <div><small>{{if this.draft "CUE EDITOR" "CUE INSPECTOR"}}</small><h2>{{if this.draft "编辑提示" "提示详情"}}</h2></div>
@@ -154,8 +179,9 @@
               {{#if this.draft.id}}<PaperButton @warn={{true}} @onClick={{fn this.removeCue this.draft.id}}>删除</PaperButton>{{/if}}
               <span></span>
               <PaperButton @onClick={{this.cancelDraft}}>取消</PaperButton>
-              <PaperButton @raised={{true}} @primary={{true}} @onClick={{this.saveDraft}}>保存提示</PaperButton>
+              <PaperButton @raised={{true}} @primary={{true}} @onClick={{this.saveDraft}}>存入工作副本</PaperButton>
             </div>
+            <p class="form-hint">改动先进入工作副本，需点击右上“保存变更单”才会合并入正式表。</p>
           </div>
         {{else if this.selectedCue}}
           <div class="selected-cue">
@@ -197,8 +223,119 @@
         </div>
       </section>
 
+      <section class="pending-panel paper-surface {{if this.pending.length "has-pending"}}">
+        <div class="panel-heading">
+          <div><small>ARBITRATION</small><h2>待裁决区</h2></div>
+          <span class="issue-count {{unless this.pending.length "issue-count-zero"}}">{{this.pending.length}}</span>
+        </div>
+        {{#if this.pendingGroups.length}}
+          <div class="pending-groups">
+            {{#each this.pendingGroups as |group|}}
+              <div class="pending-group">
+                <div class="pending-group-head">
+                  <strong>{{group.label}}</strong>
+                  <span class="pending-actions">
+                    <PaperButton @mini={{true}} @primary={{true}} @onClick={{fn this.acceptOrderGroup group.orderId}}>全选采纳</PaperButton>
+                    <PaperButton @mini={{true}} @onClick={{fn this.rejectOrderGroup group.orderId}}>全选驳回</PaperButton>
+                  </span>
+                </div>
+                {{#each group.items as |item|}}
+                  <div class="pending-item {{if item.locked "is-locked"}}">
+                    <div class="pending-item-head">
+                      <span class="pending-target">{{if item.change.cueTitle item.change.cueTitle item.change.sceneLabel}} · {{item.change.fieldLabel}}</span>
+                      <span class="pending-reason">{{item.reason}}</span>
+                    </div>
+                    <p class="pending-value old">旧值：{{display-value item.change.oldValue}}</p>
+                    <p class="pending-value new">新值：{{display-value item.change.newValue}}</p>
+                    <p class="pending-official">正式表现值：{{display-value item.officialValue}}</p>
+                    <div class="pending-item-actions">
+                      <PaperButton @mini={{true}} @primary={{true}} @onClick={{fn this.decidePending item true}}>采纳新值</PaperButton>
+                      <PaperButton @mini={{true}} @warn={{true}} @onClick={{fn this.decidePending item false}}>驳回</PaperButton>
+                    </div>
+                  </div>
+                {{/each}}
+              </div>
+            {{/each}}
+          </div>
+        {{else}}
+          <p class="empty-copy">没有待裁决改动。同字段两边都改、或锁定场次收到的改动会先留在这里。</p>
+        {{/if}}
+      </section>
+
+      <section class="orders-panel paper-surface">
+        <div class="panel-heading"><div><small>CHANGE ORDERS</small><h2>变更单记录</h2></div><span class="issue-count issue-count-neutral">{{this.orders.length}}</span></div>
+        {{#if this.orders.length}}
+          <div class="orders-list">
+            {{#each this.orderRows as |order|}}
+              <details class="order-row status-{{order.status}}">
+                <summary>
+                  <span class="order-status">{{order.statusLabel}}</span>
+                  <strong>{{order.label}}</strong>
+                  <small>{{order.changes.length}} 项 · 并 {{order.mergedCount}} / 裁 {{order.pendingCount}}</small>
+                </summary>
+                <div class="order-detail">
+                  <PaperButton @mini={{true}} @onClick={{fn this.exportOrder order}}>导出此变更单</PaperButton>
+                </div>
+                {{#if order.note}}<p class="order-note">说明：{{order.note}}</p>{{/if}}
+                <ul class="order-changes">
+                  {{#each order.changes as |change|}}
+                    <li>
+                      <span class="change-loc">{{change.sceneLabel}} {{change.cueTitle}} · {{change.fieldLabel}}</span>
+                      <span class="change-vals"><em>{{display-value change.oldValue}}</em> → <b>{{display-value change.newValue}}</b></span>
+                    </li>
+                  {{/each}}
+                </ul>
+              </details>
+            {{/each}}
+          </div>
+        {{else}}
+          <p class="empty-copy">每次“保存变更单”都会在此留档，记录场次、提示与字段的新旧值。</p>
+        {{/if}}
+      </section>
+
+      <section class="import-panel paper-surface">
+        <div class="panel-heading"><div><small>INCOMING</small><h2>接收外部变更单</h2></div></div>
+        <div class="import-body">
+          <PaperInput @label="粘贴他人导出的变更单 JSON" @textarea={{true}} @passThru={{hash rows=4}} @value={{this.importText}} @onChange={{this.setImportText}} />
+          <PaperButton @raised={{true}} @primary={{true}} @onClick={{this.importOrder}} class="wide-button">接收并合并</PaperButton>
+          <p class="form-hint">不冲突字段直接并入；同字段冲突或锁定场次的改动转入待裁决区。同浏览器多标签页会自动接收。</p>
+        </div>
+      </section>
+
+      <section class="corrupt-panel paper-surface {{if this.corrupt.length "has-corrupt"}}">
+        <div class="panel-heading">
+          <div><small>QUARANTINE</small><h2>异常箱</h2></div>
+          <span class="issue-count {{unless this.corrupt.length "issue-count-zero"}}">{{this.corrupt.length}}</span>
+        </div>
+        {{#if this.corruptRows.length}}
+          <div class="corrupt-list">
+            {{#each this.corruptRows as |record|}}
+              <div class="corrupt-item">
+                <div class="pending-item-head">
+                  <span class="pending-target">{{record.sceneLabel}} · {{record.cueTitle}}</span>
+                  <span class="pending-reason">{{record.detail}}</span>
+                </div>
+                <p class="corrupt-fields">{{join "、" record.fields}}</p>
+                <div class="pending-item-actions">
+                  {{#if record.restorable}}
+                    <PaperButton @mini={{true}} @primary={{true}} @onClick={{fn this.restoreCorrupt record}}>按默认值修复归位</PaperButton>
+                  {{/if}}
+                  <PaperButton @mini={{true}} @warn={{true}} @onClick={{fn this.discardCorrupt record}}>丢弃</PaperButton>
+                </div>
+              </div>
+            {{/each}}
+          </div>
+        {{else}}
+          <p class="empty-copy">旧版提示表按原顺序载入；字段损坏的提示会整条进入此处，其余场次照常编辑。</p>
+        {{/if}}
+      </section>
+
       <section class="version-panel paper-surface">
-        <div class="panel-heading"><div><small>LOCKED VERSIONS</small><h2>版本比较</h2></div></div>
+        <div class="panel-heading"><div><small>LOCKED SNAPSHOTS</small><h2>锁定版本比较</h2></div></div>
+        <div class="rail-footer">
+          <PaperButton @onClick={{this.lockVersion}} class="wide-button" @warn={{true}}>锁定当前正式表</PaperButton>
+          <PaperButton @onClick={{this.createRevision}} class="wide-button">解除全部锁定（建立修订）</PaperButton>
+        </div>
         {{#if this.versions.length}}
           <PaperSelect @label="选择锁定版" @options={{this.versions}} @optionLabelPath="name" @selected={{this.compareVersion}} @onChange={{this.selectCompareVersion}} class="version-select" />
           {{#if this.compareVersion}}
